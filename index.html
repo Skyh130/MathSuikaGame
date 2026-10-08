@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#bde7d0" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%8D%89%3C/text%3E%3C/svg%3E" />
+    <title>Math Suika Game</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="hud">
+        <div class="stat"><small>점수</small><b id="score">0</b></div>
+        <div class="stat"><small>최고</small><b id="best">0</b></div>
+        <div class="next"><small>다음</small><canvas id="next" width="120" height="120"></canvas></div>
+        <button id="btn-settings" class="icon-btn" aria-label="설정">⚙️</button>
+      </header>
+
+      <main class="stage">
+        <canvas id="board"></canvas>
+        <div id="toast" class="toast" role="status"></div>
+      </main>
+
+      <section class="ladder" id="ladder" aria-label="과일 성장 사다리"></section>
+
+      <nav class="powerups" aria-label="아이템">
+        <button data-pu="hint"><span class="ico">🔍</span><span class="nm">힌트</span><i id="pu-hint">0</i></button>
+        <button id="btn-bomb" data-pu="bomb"><span class="ico">💣</span><span class="nm">폭탄</span><i id="pu-bomb">0</i></button>
+        <button data-pu="shake"><span class="ico">🌀</span><span class="nm">흔들기</span><i id="pu-shake">0</i></button>
+        <button data-pu="undo"><span class="ico">⏪</span><span class="nm">되돌리기</span><i id="pu-undo">0</i></button>
+      </nav>
+
+      <div id="overlay" class="overlay hidden"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
