@@ -1,3 +1,5 @@
+import { emptyBox, type WrongBox } from './wrongbox';
+
 export type HintLevel = 'easy' | 'normal' | 'hard';
 export type PowerUp = 'hint' | 'bomb' | 'shake' | 'undo';
 
@@ -17,6 +19,8 @@ export interface Save {
   powerups: Record<PowerUp, number>;
   settings: { hint: HintLevel; maxGrade: 2 | 3 | 4 };
   stats: Record<string, TopicStat>;
+  /** 오답 상자 */
+  wrong: WrongBox;
 }
 
 const KEY = 'math-suika-game.v1';
@@ -28,6 +32,7 @@ export const defaultSave = (): Save => ({
   powerups: { hint: 2, bomb: 1, shake: 1, undo: 1 },
   settings: { hint: 'normal', maxGrade: 3 },
   stats: {},
+  wrong: emptyBox(),
 });
 
 export function loadSave(): Save {
@@ -44,6 +49,7 @@ export function loadSave(): Save {
       powerups: { ...base.powerups, ...data.powerups },
       settings: { ...base.settings, ...data.settings },
       stats: data.stats ?? {},
+      wrong: { ...base.wrong, ...data.wrong },
     };
   } catch {
     return base;

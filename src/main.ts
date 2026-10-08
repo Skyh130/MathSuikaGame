@@ -1,13 +1,16 @@
 import './style.css';
 import { goalLines, isCleared, MAX_STARS, stagesFor, starsFor, type Progress, type Stage } from './content/adventure';
-import { QUESTS, type Quest } from './content/quests';
+import { drawQuest } from './content/bank';
+import type { Difficulty, Quest } from './content/quests';
 import { getWorld, SPRITE_COUNT, WORLDS, type WorldDef } from './content/worlds';
 import { assetUrl, loadAssets } from './game/assets';
 import { CH, CW } from './game/config';
 import { Game, type Piece } from './game/Game';
 import { loadSave, writeSave, type HintLevel, type PowerUp } from './state/storage';
+import { pickDue, record, reviewBatch, type Outcome } from './state/wrongbox';
 import { showPause, showStageClear, showStageFail, showStageIntro, showStageMap, totalStars } from './ui/adventure';
-import { showQuest } from './ui/quest';
+import { showQuest, type QuestResult } from './ui/quest';
+import { showReviewSummary, showWrongBox } from './ui/wrongbox';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const save = loadSave();
@@ -136,45 +139,61 @@ const game: Game = new Game(
 );
 updatePowerups(game.powerups);
 
-const recentQuests: string[] = [];
+let devLast: Quest | null = null; // 개발 중 화면 테스트용
+const recentIds: string[] = [];
+const recentTpl: string[] = [];
 
-function pickQuest(): Quest {
-  const all = QUESTS.filter((q) => q.grade <= save.settings.maxGrade);
-  // 최근에 낸 문제는 잠시 빼고 (문제 수가 모자라면 전체 사용)
-  const fresh = all.filter((q) => !recentQuests.includes(q.id));
-  const pool = fresh.length >= 3 ? fresh : all;
-  const inWorld = (q: Quest) => (world.topics.includes(q.topic) ? 3 : 1);
-  // 덜 본 주제와 틀렸던 주제를 우선 (간단한 가중치)
-  const weight = (q: Quest) => {
-    const st = save.stats[q.topic];
-    if (!st) return 3 * inWorld(q);
-    return (1 + Math.max(0, st.seen - st.correct) * 1.5 + (st.hints > st.seen ? 0.5 : 0)) * inWorld(q);
-  };
-  const total = pool.reduce((a, q) => a + weight(q), 0);
-  let r = Math.random() * total;
-  let chosen = pool[0];
-  for (const q of pool) {
-    if ((r -= weight(q)) <= 0) {
-      chosen = q;
-      break;
-    }
+const remember = (q: Quest) => {
+  devLast = q;
+  recentIds.push(q.id);
+  if (recentIds.length > 30) recentIds.shift();
+  if (q.tpl) recentTpl.push(q.tpl);
+  if (recentTpl.length > 12) recentTpl.shift();
+};
+
+/** 모험 중에는 스테이지의 힌트 단계에 맞춘 난이도를, 자유 모드에서는 난이도를 따지지 않는다 */
+const wantedDiff = (): Difficulty | undefined =>
+  run ? ({ easy: 1, normal: 2, hard: 3 } as const)[run.stage.hint] : undefined;
+
+/** 문제은행에서 퀘스트를 하나 뽑는다. 복습할 때가 된 오답이 있으면 절반쯤은 그걸 낸다. */
+function nextQuest(): { quest: Quest; review: boolean } {
+  const due = pickDue(save.wrong, recentIds);
+  if (due && Math.random() < 0.5) {
+    remember(due.quest);
+    return { quest: due.quest, review: true };
   }
-  recentQuests.push(chosen.id);
-  if (recentQuests.length > 8) recentQuests.shift();
-  return chosen;
+  const quest = drawQuest({
+    maxGrade: save.settings.maxGrade,
+    worldTopics: world.topics,
+    diff: wantedDiff(),
+    stats: save.stats,
+    recentTpl,
+    recentIds,
+  });
+  remember(quest);
+  return { quest, review: false };
+}
+
+/** 퀘스트 결과를 기록한다: 주제별 정답률, 오답 상자 */
+function applyResult(quest: Quest, res: QuestResult): ReturnType<typeof record> {
+  const st = (save.stats[quest.topic] ??= { seen: 0, correct: 0, hints: 0 });
+  st.seen++;
+  st.hints += res.hintsUsed;
+  if (res.solved) st.correct++;
+  const outcome: Outcome = { solved: res.solved, hintsUsed: res.hintsUsed, wrong: res.wrong };
+  const change = record(save.wrong, quest, outcome);
+  writeSave(save);
+  return change;
 }
 
 async function runQuest() {
   if (questing) return;
   questing = true;
   game.pause();
-  const quest = pickQuest();
-  const res = await showQuest(overlay, quest);
-  const st = (save.stats[quest.topic] ??= { seen: 0, correct: 0, hints: 0 });
-  st.seen++;
-  st.hints += res.hintsUsed;
+  const { quest, review } = nextQuest();
+  const res = await showQuest(overlay, quest, { review });
+  const change = applyResult(quest, res);
   if (res.solved) {
-    st.correct++;
     if (run) {
       run.progress.quests++;
       if (res.hintsUsed === 0) run.progress.noHintQuests++;
@@ -184,12 +203,37 @@ async function runQuest() {
     const kind: PowerUp = r < 0.4 ? 'hint' : r < 0.6 ? 'bomb' : r < 0.8 ? 'shake' : 'undo';
     game.addPowerup(kind);
     const names = { hint: '🔍 힌트', bomb: '💣 폭탄', shake: '🌀 흔들기', undo: '⏪ 되돌리기' };
-    toast(`${names[kind]} 아이템을 얻었어요!`);
+    toast(change === 'graduated' ? '🎓 오답 졸업! 아이템도 받았어요' : `${names[kind]} 아이템을 얻었어요!`);
+  } else if (change === 'added') {
+    toast('📦 틀린 문제를 오답 상자에 담아 뒀어요');
   }
-  writeSave(save);
   questing = false;
   if (checkStage()) return;
   game.resume();
+}
+
+// ───────── 오답 상자 ─────────
+function openWrongBox() {
+  enterFree();
+  showWrongBox(overlay, save.wrong, { onStart: (n) => void runReview(n), onBack: showStart });
+}
+
+/** 게임 없이 오답 상자의 문제만 연달아 푼다 */
+async function runReview(n: number) {
+  const batch = reviewBatch(save.wrong, n).map((i) => i.quest);
+  const graduatedBefore = save.wrong.graduated;
+  let clean = 0;
+  for (const quest of batch) {
+    devLast = quest;
+    const res = await showQuest(overlay, quest, { review: true });
+    applyResult(quest, res);
+    if (res.solved && res.wrong === 0 && res.hintsUsed === 0) clean++;
+  }
+  showReviewSummary(
+    overlay,
+    { total: batch.length, clean, graduated: save.wrong.graduated - graduatedBefore, left: save.wrong.items.length },
+    { onAgain: () => void runReview(Math.min(5, save.wrong.items.length)), onBack: openWrongBox },
+  );
 }
 
 // ───────── 모험 모드 흐름 ─────────
@@ -311,6 +355,9 @@ function showStart() {
     <div class="start-actions">
       <button class="btn" id="go-adv">🗺️ 모험</button>
       <button class="btn" id="go-free">♾️ 자유</button>
+    </div>
+    <div class="start-actions">
+      <button class="btn alt" id="go-box">📦 오답 상자${save.wrong.items.length ? ` <span class="badge">${save.wrong.items.length}</span>` : ''}</button>
       <button class="btn alt" id="cfg">설정</button>
     </div></div>`;
   overlay.querySelectorAll<HTMLButtonElement>('.world').forEach((b) => {
@@ -322,6 +369,7 @@ function showStart() {
   });
   $('go-adv').onclick = openMap;
   $('go-free').onclick = startFree;
+  $('go-box').onclick = openWrongBox;
   $('cfg').onclick = () => showSettings(showStart);
 }
 
@@ -369,4 +417,4 @@ fitCanvas();
 showStart();
 game.boot();
 
-if (import.meta.env.DEV) Object.assign(window, { __game: game, __quests: QUESTS });
+if (import.meta.env.DEV) Object.assign(window, { __game: game, __save: save, __runReview: runReview, __last: () => devLast });
