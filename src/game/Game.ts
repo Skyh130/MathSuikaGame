@@ -26,6 +26,7 @@ interface Snapshot {
   fruits: Array<Piece & { x: number; y: number }>;
   score: number;
   merges: number;
+  drops: number;
   current: Piece;
   next: Piece;
 }
@@ -60,7 +61,7 @@ export interface GameSettings {
   hint: HintLevel;
 }
 
-export type GameState = 'ready' | 'playing' | 'paused' | 'over';
+export type GameState = 'ready' | 'playing' | 'paused' | 'won' | 'over';
 
 const STEP_MS = 1000 / 60;
 
@@ -81,6 +82,8 @@ export class Game {
   private overMs = 0;
   private merges = 0;
   private nextQuestAt = 6;
+  private pace: [number, number] = [5, 8];
+  private dropCount = 0;
   private maxTier = -1;
   private popups: Popup[] = [];
   private sparks: Spark[] = [];
@@ -130,6 +133,25 @@ export class Game {
     return this.world;
   }
 
+  /** 합체 몇 번마다 퀘스트를 낼지 [최소, 최대] (다음 start() 부터 적용) */
+  setQuestPace(min: number, max: number): void {
+    this.pace = [min, max];
+  }
+
+  /** 지금까지 떨어뜨린 과일 수 (되돌리기를 쓰면 줄어든다) */
+  get drops(): number {
+    return this.dropCount;
+  }
+
+  /** 목표를 이뤄서 판을 끝낸다 (게임오버가 아니라 클리어) */
+  finish(): void {
+    if (this.state === 'playing' || this.state === 'paused') this.state = 'won';
+  }
+
+  private questGap(): number {
+    return this.pace[0] + Math.floor(Math.random() * (this.pace[1] - this.pace[0] + 1));
+  }
+
   // ───────── 수명 주기 ─────────
   /** 화면 그리기 루프만 시작한다 (시작 화면 뒤에서 게임판이 보이도록). */
   boot(): void {
@@ -165,7 +187,8 @@ export class Game {
     this.sparks = [];
     this.score = 0;
     this.merges = 0;
-    this.nextQuestAt = 6;
+    this.nextQuestAt = this.questGap();
+    this.dropCount = 0;
     this.maxTier = -1;
     this.overMs = 0;
     this.snapshot = null;
@@ -200,6 +223,7 @@ export class Game {
     if (this.time - this.lastDrop < DROP_COOLDOWN_MS) return;
     this.takeSnapshot();
     this.lastDrop = this.time;
+    this.dropCount++;
     this.addFruit(this.current, this.aimX, SPAWN_Y);
     this.current = this.next;
     this.next = this.makePiece();
@@ -343,6 +367,7 @@ export class Game {
       })),
       score: this.score,
       merges: this.merges,
+      drops: this.dropCount,
       current: this.current,
       next: this.next,
     };
@@ -355,6 +380,7 @@ export class Game {
     for (const f of s.fruits) this.addFruit(f, f.x, f.y);
     this.score = s.score;
     this.merges = s.merges;
+    this.dropCount = s.drops;
     this.current = s.current;
     this.next = s.next;
     this.hooks.onScore(this.score);
@@ -377,6 +403,7 @@ export class Game {
   };
 
   private tick(dt: number): void {
+    if (this.state !== 'playing') return; // 같은 프레임에서 클리어·게임오버가 난 뒤에는 멈춘다
     this.time += dt;
     Engine.update(this.engine, dt);
     this.processMerges();
@@ -435,7 +462,7 @@ export class Game {
       this.hooks.onScore(this.score);
     }
     if (this.merges >= this.nextQuestAt && this.state === 'playing') {
-      this.nextQuestAt = this.merges + 5 + Math.floor(Math.random() * 4);
+      this.nextQuestAt = this.merges + this.questGap();
       this.hooks.onQuest();
     }
   }

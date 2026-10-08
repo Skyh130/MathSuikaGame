@@ -84,10 +84,11 @@ def fruits():
     mid = im.height / 2
     top = sorted([b for b in boxes if (b[1] + b[3]) / 2 < mid], key=lambda b: b[0])
     bottom = sorted([b for b in boxes if (b[1] + b[3]) / 2 >= mid], key=lambda b: b[0])
-    body, dy = [], []
+    body, dy, crops = [], [], []
     for i, (l, t, r, b) in enumerate(top + bottom):
         pad = 6
         crop = clean.crop((max(0, l - pad), max(0, t - pad), min(im.width, r + pad), min(im.height, b + pad)))
+        crops.append(trim(crop))
         sq = square(trim(crop), 256)
         sq.save(OUT / 'fruits' / f'{i}.png', optimize=True)
         # 면적이 같은 원의 반지름 / 한 변 → 물리 원과 그림 크기를 맞추는 데 쓴다
@@ -103,6 +104,43 @@ def fruits():
         f'export const FRUIT_BODY_DY = {dy} as const;\n',
         encoding='utf-8',
     )
+    return crops[-1]  # 수박 (원본 해상도) → 앱 아이콘에 쓴다
+
+
+def icons(melon: Image.Image) -> None:
+    """홈 화면 아이콘: 하늘 → 풀밭 배경 위의 수박"""
+    from PIL import ImageFilter
+
+    out = ROOT / 'public' / 'icons'
+    out.mkdir(parents=True, exist_ok=True)
+
+    def render(size: int, rounded: bool, fill: float) -> Image.Image:
+        s = size * 2  # 부드럽게 그린 뒤 줄인다
+        top, bottom = np.array([191, 227, 255]), np.array([140, 205, 120])
+        t = np.linspace(0, 1, s)[:, None, None]
+        bg = (top * (1 - t) + bottom * t).astype(np.uint8)
+        canvas = Image.fromarray(np.broadcast_to(bg, (s, s, 3)).copy()).convert('RGBA')
+        w, h = melon.size
+        k = s * fill / max(w, h)
+        m = melon.resize((round(w * k), round(h * k)), Image.LANCZOS)
+        cx, cy = s // 2, round(s * 0.52)
+        # 바닥 그림자
+        sh = Image.new('RGBA', (s, s), (0, 0, 0, 0))
+        ImageDraw.Draw(sh).ellipse((cx - m.width * 0.42, cy + m.height * 0.40, cx + m.width * 0.42, cy + m.height * 0.56), fill=(40, 90, 40, 90))
+        canvas.alpha_composite(sh.filter(ImageFilter.GaussianBlur(s * 0.012)))
+        canvas.alpha_composite(m, (cx - m.width // 2, cy - m.height // 2))
+        if rounded:
+            mask = Image.new('L', (s, s), 0)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, s - 1, s - 1), radius=round(s * 0.22), fill=255)
+            canvas.putalpha(mask)
+        return canvas.resize((size, size), Image.LANCZOS)
+
+    render(192, True, 0.66).save(out / 'icon-192.png', optimize=True)
+    render(512, True, 0.66).save(out / 'icon-512.png', optimize=True)
+    # 마스크 가능한 아이콘: 가장자리를 기기가 잘라내므로 그림은 안쪽 안전 영역(약 60%)에만 둔다
+    render(512, False, 0.52).save(out / 'icon-maskable-512.png', optimize=True)
+    render(180, False, 0.62).save(out / 'apple-touch-icon.png', optimize=True)
+    render(64, True, 0.78).save(out / 'favicon.png', optimize=True)
 
 
 def powerups():
@@ -186,5 +224,5 @@ def background():
 
 if __name__ == '__main__':
     OUT.mkdir(parents=True, exist_ok=True)
-    fruits(); powerups(); fox(); logo(); box(); background()
+    icons(fruits()); powerups(); fox(); logo(); box(); background()
     print('done')

@@ -1,11 +1,20 @@
+import './fonts.css';
 import './style.css';
-import { QUESTS, type Quest } from './content/quests';
+import { goalLines, isCleared, MAX_STARS, stagesFor, starsFor, type Progress, type Stage } from './content/adventure';
+import { drawQuest } from './content/bank';
+import type { Difficulty, Quest } from './content/quests';
 import { getWorld, SPRITE_COUNT, WORLDS, type WorldDef } from './content/worlds';
 import { assetUrl, loadAssets } from './game/assets';
 import { CH, CW } from './game/config';
 import { Game, type Piece } from './game/Game';
 import { loadSave, writeSave, type HintLevel, type PowerUp } from './state/storage';
-import { showQuest } from './ui/quest';
+import { addPlay, EXTRA_MIN, grantExtra, limitState, logQuest } from './state/report';
+import { pickDue, record, reviewBatch, type Outcome } from './state/wrongbox';
+import { showPause, showStageClear, showStageFail, showStageIntro, showStageMap, totalStars } from './ui/adventure';
+import { showQuest, type QuestResult } from './ui/quest';
+import { applyUpdate, initPwa, promptInstall, pwaStatus } from './pwa';
+import { askPin, showLock, showReport } from './ui/parent';
+import { showReviewSummary, showWrongBox } from './ui/wrongbox';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const save = loadSave();
@@ -44,12 +53,12 @@ function toast(msg: string) {
 }
 
 const ladderEl = $('ladder');
-function renderLadder() {
+function renderLadder(goalTier?: number) {
   const n = world.ladder.length;
   ladderEl.innerHTML = world.ladder
     .map((v, i) => {
       const size = Math.round(16 + (i / (n - 1)) * 18);
-      return `<span class="step" data-i="${i}"><img class="dot" style="--sz:${size}px" src="${assetUrl(
+      return `<span class="step${i === goalTier ? ' goal' : ''}" data-i="${i}"><img class="dot" style="--sz:${size}px" src="${assetUrl(
         `fruits/${world.sprites[i]}.png`,
       )}" alt="" /><span class="lbl">${world.format(v)}</span></span>`;
     })
@@ -68,6 +77,35 @@ function chooseWorld(id: string) {
   writeSave(save);
 }
 
+// ───────── 모험 모드 상태 ─────────
+interface StageRun {
+  stage: Stage;
+  progress: Progress;
+}
+/** 모험 중이면 현재 스테이지, 자유 모드면 null */
+let run: StageRun | null = null;
+const goalsEl = $('goals');
+
+function renderGoals() {
+  if (!run) {
+    goalsEl.classList.add('hidden');
+    return;
+  }
+  goalsEl.classList.remove('hidden');
+  goalsEl.innerHTML = goalLines(world, run.stage.goal, run.progress)
+    .map((l) => `<span class="chip${l.done ? ' done' : ''}">${l.icon} ${l.text}</span>`)
+    .join('');
+}
+
+/** 자유 모드로 돌아간다 (목표 표시 제거, 사용자가 정한 힌트 단계) */
+function enterFree() {
+  run = null;
+  game.setSettings({ hint: save.settings.hint });
+  game.setQuestPace(5, 8);
+  renderGoals();
+  renderLadder();
+}
+
 function updatePowerups(c: Record<PowerUp, number>) {
   for (const k of Object.keys(c) as PowerUp[]) {
     $(`pu-${k}`).textContent = String(c[k]);
@@ -79,6 +117,7 @@ function updatePowerups(c: Record<PowerUp, number>) {
 
 // ───────── 게임 ─────────
 let questing = false;
+let reviewing = false;
 const game: Game = new Game(
   ctx,
   world,
@@ -86,8 +125,14 @@ const game: Game = new Game(
   {
     onScore: (s) => (scoreEl.textContent = String(s)),
     onNext: (p: Piece) => game.drawPreview(nextCtx, p, nextCanvas.width),
-    onMaxTier: (t) =>
-      ladderEl.querySelectorAll('.step').forEach((el, i) => el.classList.toggle('on', i <= t)),
+    onMaxTier: (t) => {
+      ladderEl.querySelectorAll('.step').forEach((el, i) => el.classList.toggle('on', i <= t));
+      if (run && t > run.progress.maxTier) {
+        run.progress.maxTier = t;
+        renderGoals();
+        checkStage();
+      }
+    },
     onQuest: () => void runQuest(),
     onOver: (s) => gameOver(s),
     onToast: toast,
@@ -99,57 +144,168 @@ const game: Game = new Game(
 );
 updatePowerups(game.powerups);
 
-const recentQuests: string[] = [];
+let devLast: Quest | null = null; // 개발 중 화면 테스트용
+const recentIds: string[] = [];
+const recentTpl: string[] = [];
 
-function pickQuest(): Quest {
-  const all = QUESTS.filter((q) => q.grade <= save.settings.maxGrade);
-  // 최근에 낸 문제는 잠시 빼고 (문제 수가 모자라면 전체 사용)
-  const fresh = all.filter((q) => !recentQuests.includes(q.id));
-  const pool = fresh.length >= 3 ? fresh : all;
-  const inWorld = (q: Quest) => (world.topics.includes(q.topic) ? 3 : 1);
-  // 덜 본 주제와 틀렸던 주제를 우선 (간단한 가중치)
-  const weight = (q: Quest) => {
-    const st = save.stats[q.topic];
-    if (!st) return 3 * inWorld(q);
-    return (1 + Math.max(0, st.seen - st.correct) * 1.5 + (st.hints > st.seen ? 0.5 : 0)) * inWorld(q);
-  };
-  const total = pool.reduce((a, q) => a + weight(q), 0);
-  let r = Math.random() * total;
-  let chosen = pool[0];
-  for (const q of pool) {
-    if ((r -= weight(q)) <= 0) {
-      chosen = q;
-      break;
-    }
+const remember = (q: Quest) => {
+  devLast = q;
+  recentIds.push(q.id);
+  if (recentIds.length > 30) recentIds.shift();
+  if (q.tpl) recentTpl.push(q.tpl);
+  if (recentTpl.length > 12) recentTpl.shift();
+};
+
+/** 모험 중에는 스테이지의 힌트 단계에 맞춘 난이도를, 자유 모드에서는 난이도를 따지지 않는다 */
+const wantedDiff = (): Difficulty | undefined =>
+  run ? ({ easy: 1, normal: 2, hard: 3 } as const)[run.stage.hint] : undefined;
+
+/** 문제은행에서 퀘스트를 하나 뽑는다. 복습할 때가 된 오답이 있으면 절반쯤은 그걸 낸다. */
+function nextQuest(): { quest: Quest; review: boolean } {
+  const due = pickDue(save.wrong, recentIds);
+  if (due && Math.random() < 0.5) {
+    remember(due.quest);
+    return { quest: due.quest, review: true };
   }
-  recentQuests.push(chosen.id);
-  if (recentQuests.length > 8) recentQuests.shift();
-  return chosen;
+  const quest = drawQuest({
+    maxGrade: save.settings.maxGrade,
+    worldTopics: world.topics,
+    diff: wantedDiff(),
+    stats: save.stats,
+    recentTpl,
+    recentIds,
+  });
+  remember(quest);
+  return { quest, review: false };
+}
+
+/** 퀘스트 결과를 기록한다: 주제별 정답률, 오답 상자 */
+function applyResult(quest: Quest, res: QuestResult): ReturnType<typeof record> {
+  logQuest(save, quest.topic, res, new Date());
+  const outcome: Outcome = { solved: res.solved, hintsUsed: res.hintsUsed, wrong: res.wrong };
+  const change = record(save.wrong, quest, outcome);
+  writeSave(save);
+  return change;
 }
 
 async function runQuest() {
   if (questing) return;
   questing = true;
   game.pause();
-  const quest = pickQuest();
-  const res = await showQuest(overlay, quest);
-  const st = (save.stats[quest.topic] ??= { seen: 0, correct: 0, hints: 0 });
-  st.seen++;
-  st.hints += res.hintsUsed;
+  const { quest, review } = nextQuest();
+  const res = await showQuest(overlay, quest, { review });
+  const change = applyResult(quest, res);
   if (res.solved) {
-    st.correct++;
+    if (run) {
+      run.progress.quests++;
+      if (res.hintsUsed === 0) run.progress.noHintQuests++;
+      renderGoals();
+    }
     const r = Math.random();
     const kind: PowerUp = r < 0.4 ? 'hint' : r < 0.6 ? 'bomb' : r < 0.8 ? 'shake' : 'undo';
     game.addPowerup(kind);
     const names = { hint: '🔍 힌트', bomb: '💣 폭탄', shake: '🌀 흔들기', undo: '⏪ 되돌리기' };
-    toast(`${names[kind]} 아이템을 얻었어요!`);
+    toast(change === 'graduated' ? '🎓 오답 졸업! 아이템도 받았어요' : `${names[kind]} 아이템을 얻었어요!`);
+  } else if (change === 'added') {
+    toast('📦 틀린 문제를 오답 상자에 담아 뒀어요');
   }
-  writeSave(save);
   questing = false;
+  if (checkStage()) return;
+  if (guardLimit()) return;
   game.resume();
 }
 
+// ───────── 오답 상자 ─────────
+function openWrongBox() {
+  if (guardLimit()) return;
+  enterFree();
+  showWrongBox(overlay, save.wrong, { onStart: (n) => void runReview(n), onBack: showStart });
+}
+
+/** 게임 없이 오답 상자의 문제만 연달아 푼다 */
+async function runReview(n: number) {
+  if (guardLimit()) return;
+  reviewing = true;
+  const batch = reviewBatch(save.wrong, n).map((i) => i.quest);
+  const graduatedBefore = save.wrong.graduated;
+  let clean = 0;
+  for (const quest of batch) {
+    devLast = quest;
+    const res = await showQuest(overlay, quest, { review: true });
+    applyResult(quest, res);
+    if (res.solved && res.wrong === 0 && res.hintsUsed === 0) clean++;
+    if (limitState(save, new Date()).over) break; // 오늘 시간이 다 되면 여기서 멈춘다
+  }
+  reviewing = false;
+  if (guardLimit()) return;
+  showReviewSummary(
+    overlay,
+    { total: batch.length, clean, graduated: save.wrong.graduated - graduatedBefore, left: save.wrong.items.length },
+    { onAgain: () => void runReview(Math.min(5, save.wrong.items.length)), onBack: openWrongBox },
+  );
+}
+
+// ───────── 모험 모드 흐름 ─────────
+/** 목표를 이뤘으면 클리어 처리하고 true */
+function checkStage(): boolean {
+  if (!run || game.state === 'won' || !isCleared(run.stage.goal, run.progress)) return false;
+  const { stage, progress } = run;
+  game.finish();
+  progress.drops = game.drops;
+  const stars = starsFor(stage, progress);
+  const best = save.adventure[stage.id] ?? 0;
+  save.adventure[stage.id] = Math.max(best, stars);
+  writeSave(save);
+  const hasNext = stage.index + 1 < stagesFor(world).length;
+  showStageClear(
+    overlay,
+    { world, stage, stars, best, hasNext, drops: progress.drops },
+    {
+      onNext: () => startStage(stagesFor(world)[stage.index + 1]),
+      onRetry: () => startStage(stage),
+      onMap: openMap,
+    },
+  );
+  return true;
+}
+
+function startStage(stage: Stage) {
+  if (guardLimit()) return;
+  run = { stage, progress: { maxTier: -1, quests: 0, noHintQuests: 0, drops: 0 } };
+  game.setSettings({ hint: stage.hint });
+  game.setQuestPace(...stage.pace);
+  renderGoals();
+  renderLadder(stage.goal.tier);
+  overlay.classList.add('hidden');
+  game.start();
+}
+
+function openMap() {
+  if (guardLimit()) return;
+  enterFree();
+  const stages = stagesFor(world);
+  showStageMap(overlay, world, stages, save.adventure, {
+    onPick: (i) =>
+      showStageIntro(overlay, world, stages[i], { onGo: () => startStage(stages[i]), onBack: openMap }),
+    onBack: showStart,
+  });
+}
+
+function startFree() {
+  if (guardLimit()) return;
+  enterFree();
+  overlay.classList.add('hidden');
+  game.start();
+}
+
 function gameOver(score: number) {
+  if (run) {
+    showStageFail(overlay, { world, stage: run.stage, progress: run.progress }, {
+      onRetry: () => startStage(run!.stage),
+      onMap: openMap,
+    });
+    return;
+  }
   const isBest = score > (save.bests[world.id] ?? 0);
   if (isBest) {
     save.bests[world.id] = score;
@@ -163,10 +319,7 @@ function gameOver(score: number) {
     <p>점수 <b>${score}</b></p>
     <button class="btn" id="again">다시 하기</button>
     <button class="btn alt" id="home">처음으로</button></div>`;
-  $('again').onclick = () => {
-    overlay.classList.add('hidden');
-    game.start();
-  };
+  $('again').onclick = startFree;
   $('home').onclick = showStart;
 }
 
@@ -197,18 +350,123 @@ function showSettings(back: () => void) {
   };
 }
 
+// ───────── 앱 설치 · 오프라인 · 새 버전 ─────────
+/** 시작 화면의 설치/업데이트 안내 줄 (게임 중에는 보여주지 않는다) */
+function renderPwaRow() {
+  const row = document.getElementById('pwa-row');
+  if (!row) return;
+  const st = pwaStatus();
+  const parts: string[] = [];
+  if (st.updateReady) parts.push('<button class="btn sm" id="pwa-update">🔄 새 버전으로 바꾸기</button>');
+  else if (st.canInstall) parts.push('<button class="btn alt sm" id="pwa-install">📲 홈 화면에 추가</button>');
+  else if (st.iosHint) parts.push('<p class="sub">📲 공유 버튼 ▸ <b>홈 화면에 추가</b>를 누르면 앱처럼 쓸 수 있어요</p>');
+  if (st.offlineReady) parts.push('<p class="sub ok">✅ 인터넷이 없어도 할 수 있어요</p>');
+  row.innerHTML = parts.join('');
+  document.getElementById('pwa-update')?.addEventListener('click', applyUpdate);
+  document.getElementById('pwa-install')?.addEventListener('click', async () => {
+    const r = await promptInstall();
+    if (r === 'accepted') toast('홈 화면에 추가했어요!');
+  });
+}
+initPwa(renderPwaRow);
+
+// ───────── 부모 화면과 하루 시간 제한 ─────────
+const now = () => new Date();
+
+/** 부모 PIN을 확인한 뒤 onOk 를 부른다 (PIN이 없으면 바로) */
+function parentGate(onOk: () => void, onCancel: () => void) {
+  if (!save.settings.pinHash) return onOk();
+  askPin(overlay, { title: '부모님 확인', sub: 'PIN 4자리를 입력해 주세요', mode: 'verify', stored: save.settings.pinHash, onOk, onCancel });
+}
+
+function openParent() {
+  parentGate(
+    () => showReport(overlay, { save, now, onClose: showStart }),
+    showStart,
+  );
+}
+
+let lockShown = false;
+
+/** 오늘 놀이 시간을 다 썼으면 잠금 카드를 보여주고 true */
+function guardLimit(): boolean {
+  if (!limitState(save, now()).over) return false;
+  if (game.state === 'playing') game.pause();
+  lockShown = true;
+  showLock(overlay, {
+    limitMin: save.settings.dailyLimitMin,
+    onParent: () =>
+      parentGate(
+        () => {
+          grantExtra(save, now());
+          writeSave(save);
+          lockShown = false;
+          toast(`${EXTRA_MIN}분 늘렸어요`);
+          // 하던 판이 있으면 이어서, 아니면 처음 화면으로
+          if (game.state === 'paused' && !questing && !reviewing) {
+            overlay.classList.add('hidden');
+            game.resume();
+          } else showStart();
+        },
+        () => guardLimit(),
+      ),
+  });
+  return true;
+}
+
+/** 1초마다: 놀이 시간을 기록하고, 제한이 가까워지면 알리고, 넘으면 잠근다 */
+let warned = false;
+let seconds = 0;
+setInterval(() => {
+  if (document.hidden) return;
+  if (lockShown) {
+    // 자정이 지나 새 날이 되면 잠금을 푼다
+    if (!limitState(save, now()).over) {
+      lockShown = false;
+      showStart();
+    }
+    return;
+  }
+  if (!(game.state === 'playing' || questing || reviewing)) return;
+  addPlay(save, 1000, now());
+  if (++seconds % 10 === 0) writeSave(save);
+  const lim = limitState(save, now());
+  if (!lim.enabled) return;
+  if (!warned && lim.remainingMs <= 5 * 60_000 && lim.remainingMs > 0) {
+    warned = true;
+    toast('오늘 놀 시간이 5분 남았어요');
+  }
+  if (lim.remainingMs > 5 * 60_000) warned = false;
+  // 퀘스트 카드를 푸는 중에는 끝낸 뒤에 잠근다
+  if (lim.over && !questing && !reviewing) guardLimit();
+}, 1000);
+window.addEventListener('pagehide', () => writeSave(save));
+
 function showStart() {
+  enterFree();
   overlay.classList.remove('hidden');
-  const card = (w: WorldDef) => `<button class="world${w.id === world.id ? ' sel' : ''}" data-id="${w.id}">
+  const card = (w: WorldDef) => {
+    const stars = totalStars(stagesFor(w), save.adventure);
+    return `<button class="world${w.id === world.id ? ' sel' : ''}" data-id="${w.id}">
       <span class="we">${w.emoji}</span><b>${w.name}</b><small>${w.grades}</small>
-      <i>${save.bests[w.id] ? `🏆 ${save.bests[w.id]}` : '&nbsp;'}</i></button>`;
+      <i>${stars ? `⭐ ${stars}/${MAX_STARS}` : '&nbsp;'}</i></button>`;
+  };
   overlay.innerHTML = `<div class="card">
     <img class="logo" src="${assetUrl('ui/logo.png')}" alt="Math Suika Game" />
     <p class="sub">값이 같은 과일끼리 닿으면 한 단계 커져요!</p>
     <div class="worlds">${WORLDS.map(card).join('')}</div>
     <p class="sub blurb" id="blurb">${world.emoji} ${world.blurb}</p>
-    <button class="btn" id="go">시작하기</button>
-    <button class="btn alt" id="cfg">설정</button></div>`;
+    <div class="start-actions">
+      <button class="btn" id="go-adv">🗺️ 모험</button>
+      <button class="btn" id="go-free">♾️ 자유</button>
+    </div>
+    <div class="start-actions">
+      <button class="btn alt" id="go-box">📦 오답 상자${save.wrong.items.length ? ` <span class="badge">${save.wrong.items.length}</span>` : ''}</button>
+      <button class="btn alt" id="cfg">설정</button>
+    </div>
+    <div id="pwa-row" class="pwa-row"></div>
+    <button class="linkbtn" id="go-parent">👪 부모님</button></div>`;
+  renderPwaRow();
   overlay.querySelectorAll<HTMLButtonElement>('.world').forEach((b) => {
     b.onclick = () => {
       chooseWorld(b.dataset.id!);
@@ -216,10 +474,10 @@ function showStart() {
       $('blurb').textContent = `${world.emoji} ${world.blurb}`;
     };
   });
-  $('go').onclick = () => {
-    overlay.classList.add('hidden');
-    game.start();
-  };
+  $('go-adv').onclick = openMap;
+  $('go-free').onclick = startFree;
+  $('go-box').onclick = openWrongBox;
+  $('go-parent').onclick = openParent;
   $('cfg').onclick = () => showSettings(showStart);
 }
 
@@ -246,10 +504,15 @@ document.querySelectorAll<HTMLButtonElement>('.powerups button').forEach((b) => 
 $('btn-settings').onclick = () => {
   if (game.state === 'playing') {
     game.pause();
-    showSettings(() => {
+    const resume = () => {
       overlay.classList.add('hidden');
       game.resume();
-    });
+    };
+    if (run) {
+      showPause(overlay, { onResume: resume, onRetry: () => startStage(run!.stage), onMap: openMap });
+    } else {
+      showSettings(resume);
+    }
   } else if (game.state === 'ready') showSettings(showStart);
 };
 
@@ -262,4 +525,4 @@ fitCanvas();
 showStart();
 game.boot();
 
-if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
+if (import.meta.env.DEV) Object.assign(window, { __game: game, __save: save, __runReview: runReview, __last: () => devLast });

@@ -8,10 +8,18 @@ export type Topic =
   | 'measure'
   | 'fraction'
   | 'big-number'
-  | 'angle';
+  | 'angle'
+  | 'multiply';
+
+export type Difficulty = 1 | 2 | 3;
 
 interface Base {
+  /** 문제 하나(숫자까지 정해진 것)의 고유 번호. 오답 상자가 이걸로 구분한다 */
   id: string;
+  /** 문제 틀(템플릿) 번호. 같은 틀이 연달아 나오지 않게 하는 데 쓴다 */
+  tpl?: string;
+  /** 난이도 1(쉬움) ~ 3(어려움). 없으면 학년에서 정한다 */
+  diff?: Difficulty;
   grade: 2 | 3 | 4;
   topic: Topic;
   prompt: string;
@@ -46,6 +54,7 @@ export const TOPIC_NAMES: Record<Topic, string> = {
   fraction: '분수',
   'big-number': '큰 수',
   angle: '각도',
+  multiply: '곱셈·나눗셈',
 };
 
 export const QUESTS: Quest[] = [

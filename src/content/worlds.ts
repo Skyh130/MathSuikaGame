@@ -56,7 +56,7 @@ export const WORLDS: WorldDef[] = [
     ladder: [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024],
     label: (v, o) => makeExpr(v, o),
     format: String,
-    topics: ['make-expr', 'pattern', 'number-sense'],
+    topics: ['make-expr', 'pattern', 'number-sense', 'multiply'],
   }),
   world({
     id: 'length-village',
@@ -100,7 +100,7 @@ export const WORLDS: WorldDef[] = [
     ladder: [500, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000],
     label: (v, o) => makeLabel(v, KINDS.big, o),
     format: fmtKorean,
-    topics: ['big-number', 'number-sense'],
+    topics: ['big-number', 'number-sense', 'multiply'],
   }),
   world({
     id: 'angle-castle',

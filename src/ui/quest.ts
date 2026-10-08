@@ -6,13 +6,21 @@ export interface QuestResult {
   solved: boolean;
   hintsUsed: number;
   attempts: number;
+  /** 틀린 횟수 (오답 상자에 넣을지 정한다) */
+  wrong: number;
+}
+
+export interface QuestOptions {
+  /** 오답 상자에서 다시 나온 문제 */
+  review?: boolean;
 }
 
 /** 퀘스트 카드를 overlay 안에 띄우고, 끝나면 결과를 돌려준다. 시간제한은 없다. */
-export function showQuest(overlay: HTMLElement, quest: Quest): Promise<QuestResult> {
+export function showQuest(overlay: HTMLElement, quest: Quest, opts: QuestOptions = {}): Promise<QuestResult> {
   return new Promise((resolve) => {
     let hintsUsed = 0;
     let attempts = 0;
+    let wrong = 0;
     let solved = false;
 
     const card = document.createElement('div');
@@ -23,13 +31,15 @@ export function showQuest(overlay: HTMLElement, quest: Quest): Promise<QuestResu
     const finish = () => {
       overlay.classList.add('hidden');
       overlay.replaceChildren();
-      resolve({ solved, hintsUsed, attempts });
+      resolve({ solved, hintsUsed, attempts, wrong });
     };
 
     // 공통 뼈대
     card.innerHTML = `
       <img class="fox corner" src="${assetUrl('fox/think.png')}" alt="" />
-      <span class="ribbon">🎁 미스터리 퀘스트 · ${TOPIC_NAMES[quest.topic]}</span>
+      <span class="ribbon${opts.review ? ' review' : ''}">${
+        opts.review ? '🔁 오답 다시 도전' : '🎁 미스터리 퀘스트'
+      } · ${TOPIC_NAMES[quest.topic]}</span>
       <p class="q"></p>
       <div class="body"></div>
       <div class="hints"></div>
@@ -51,7 +61,7 @@ export function showQuest(overlay: HTMLElement, quest: Quest): Promise<QuestResu
       msg.textContent = text;
       msg.className = `msg ${cls}`;
     };
-    const wrong = () => {
+    const shakeCard = () => {
       card.classList.remove('shake');
       void card.offsetWidth;
       card.classList.add('shake');
@@ -103,7 +113,10 @@ export function showQuest(overlay: HTMLElement, quest: Quest): Promise<QuestResu
       attempts++;
       say('');
       if (check()) win();
-      else wrong();
+      else {
+        wrong++;
+        shakeCard();
+      }
     };
     (card.querySelector('[data-act=skip]') as HTMLElement).onclick = finish;
   });
