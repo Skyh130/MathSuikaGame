@@ -273,3 +273,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .card.report .start-actions .btn { display: inline-block; margin: 4px 3px 0; }
 #io { width: 100%; font-family: inherit; font-size: 12px; border: 2px solid #e6d3b3; border-radius: 10px; padding: 6px; background: #fff; color: var(--ink); resize: vertical; }
 .msg.bad { min-height: 20px; }
+
+.pwa-row { margin-top: 2px; }
+.pwa-row .sub { margin: 4px 0 0; font-size: 13px; }
+.pwa-row .sub.ok { color: #1f8f5b; opacity: 1; }
+.pwa-row .btn { margin-top: 4px; }

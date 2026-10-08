@@ -1,3 +1,4 @@
+import './fonts.css';
 import './style.css';
 import { goalLines, isCleared, MAX_STARS, stagesFor, starsFor, type Progress, type Stage } from './content/adventure';
 import { drawQuest } from './content/bank';
@@ -11,6 +12,7 @@ import { addPlay, EXTRA_MIN, grantExtra, limitState, logQuest } from './state/re
 import { pickDue, record, reviewBatch, type Outcome } from './state/wrongbox';
 import { showPause, showStageClear, showStageFail, showStageIntro, showStageMap, totalStars } from './ui/adventure';
 import { showQuest, type QuestResult } from './ui/quest';
+import { applyUpdate, initPwa, promptInstall, pwaStatus } from './pwa';
 import { askPin, showLock, showReport } from './ui/parent';
 import { showReviewSummary, showWrongBox } from './ui/wrongbox';
 
@@ -348,6 +350,26 @@ function showSettings(back: () => void) {
   };
 }
 
+// ───────── 앱 설치 · 오프라인 · 새 버전 ─────────
+/** 시작 화면의 설치/업데이트 안내 줄 (게임 중에는 보여주지 않는다) */
+function renderPwaRow() {
+  const row = document.getElementById('pwa-row');
+  if (!row) return;
+  const st = pwaStatus();
+  const parts: string[] = [];
+  if (st.updateReady) parts.push('<button class="btn sm" id="pwa-update">🔄 새 버전으로 바꾸기</button>');
+  else if (st.canInstall) parts.push('<button class="btn alt sm" id="pwa-install">📲 홈 화면에 추가</button>');
+  else if (st.iosHint) parts.push('<p class="sub">📲 공유 버튼 ▸ <b>홈 화면에 추가</b>를 누르면 앱처럼 쓸 수 있어요</p>');
+  if (st.offlineReady) parts.push('<p class="sub ok">✅ 인터넷이 없어도 할 수 있어요</p>');
+  row.innerHTML = parts.join('');
+  document.getElementById('pwa-update')?.addEventListener('click', applyUpdate);
+  document.getElementById('pwa-install')?.addEventListener('click', async () => {
+    const r = await promptInstall();
+    if (r === 'accepted') toast('홈 화면에 추가했어요!');
+  });
+}
+initPwa(renderPwaRow);
+
 // ───────── 부모 화면과 하루 시간 제한 ─────────
 const now = () => new Date();
 
@@ -442,7 +464,9 @@ function showStart() {
       <button class="btn alt" id="go-box">📦 오답 상자${save.wrong.items.length ? ` <span class="badge">${save.wrong.items.length}</span>` : ''}</button>
       <button class="btn alt" id="cfg">설정</button>
     </div>
+    <div id="pwa-row" class="pwa-row"></div>
     <button class="linkbtn" id="go-parent">👪 부모님</button></div>`;
+  renderPwaRow();
   overlay.querySelectorAll<HTMLButtonElement>('.world').forEach((b) => {
     b.onclick = () => {
       chooseWorld(b.dataset.id!);
