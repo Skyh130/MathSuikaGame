@@ -7,9 +7,11 @@ import { assetUrl, loadAssets } from './game/assets';
 import { CH, CW } from './game/config';
 import { Game, type Piece } from './game/Game';
 import { loadSave, writeSave, type HintLevel, type PowerUp } from './state/storage';
+import { addPlay, EXTRA_MIN, grantExtra, limitState, logQuest } from './state/report';
 import { pickDue, record, reviewBatch, type Outcome } from './state/wrongbox';
 import { showPause, showStageClear, showStageFail, showStageIntro, showStageMap, totalStars } from './ui/adventure';
 import { showQuest, type QuestResult } from './ui/quest';
+import { askPin, showLock, showReport } from './ui/parent';
 import { showReviewSummary, showWrongBox } from './ui/wrongbox';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -113,6 +115,7 @@ function updatePowerups(c: Record<PowerUp, number>) {
 
 // ───────── 게임 ─────────
 let questing = false;
+let reviewing = false;
 const game: Game = new Game(
   ctx,
   world,
@@ -176,10 +179,7 @@ function nextQuest(): { quest: Quest; review: boolean } {
 
 /** 퀘스트 결과를 기록한다: 주제별 정답률, 오답 상자 */
 function applyResult(quest: Quest, res: QuestResult): ReturnType<typeof record> {
-  const st = (save.stats[quest.topic] ??= { seen: 0, correct: 0, hints: 0 });
-  st.seen++;
-  st.hints += res.hintsUsed;
-  if (res.solved) st.correct++;
+  logQuest(save, quest.topic, res, new Date());
   const outcome: Outcome = { solved: res.solved, hintsUsed: res.hintsUsed, wrong: res.wrong };
   const change = record(save.wrong, quest, outcome);
   writeSave(save);
@@ -209,17 +209,21 @@ async function runQuest() {
   }
   questing = false;
   if (checkStage()) return;
+  if (guardLimit()) return;
   game.resume();
 }
 
 // ───────── 오답 상자 ─────────
 function openWrongBox() {
+  if (guardLimit()) return;
   enterFree();
   showWrongBox(overlay, save.wrong, { onStart: (n) => void runReview(n), onBack: showStart });
 }
 
 /** 게임 없이 오답 상자의 문제만 연달아 푼다 */
 async function runReview(n: number) {
+  if (guardLimit()) return;
+  reviewing = true;
   const batch = reviewBatch(save.wrong, n).map((i) => i.quest);
   const graduatedBefore = save.wrong.graduated;
   let clean = 0;
@@ -228,7 +232,10 @@ async function runReview(n: number) {
     const res = await showQuest(overlay, quest, { review: true });
     applyResult(quest, res);
     if (res.solved && res.wrong === 0 && res.hintsUsed === 0) clean++;
+    if (limitState(save, new Date()).over) break; // 오늘 시간이 다 되면 여기서 멈춘다
   }
+  reviewing = false;
+  if (guardLimit()) return;
   showReviewSummary(
     overlay,
     { total: batch.length, clean, graduated: save.wrong.graduated - graduatedBefore, left: save.wrong.items.length },
@@ -261,6 +268,7 @@ function checkStage(): boolean {
 }
 
 function startStage(stage: Stage) {
+  if (guardLimit()) return;
   run = { stage, progress: { maxTier: -1, quests: 0, noHintQuests: 0, drops: 0 } };
   game.setSettings({ hint: stage.hint });
   game.setQuestPace(...stage.pace);
@@ -271,6 +279,7 @@ function startStage(stage: Stage) {
 }
 
 function openMap() {
+  if (guardLimit()) return;
   enterFree();
   const stages = stagesFor(world);
   showStageMap(overlay, world, stages, save.adventure, {
@@ -281,6 +290,7 @@ function openMap() {
 }
 
 function startFree() {
+  if (guardLimit()) return;
   enterFree();
   overlay.classList.add('hidden');
   game.start();
@@ -338,6 +348,78 @@ function showSettings(back: () => void) {
   };
 }
 
+// ───────── 부모 화면과 하루 시간 제한 ─────────
+const now = () => new Date();
+
+/** 부모 PIN을 확인한 뒤 onOk 를 부른다 (PIN이 없으면 바로) */
+function parentGate(onOk: () => void, onCancel: () => void) {
+  if (!save.settings.pinHash) return onOk();
+  askPin(overlay, { title: '부모님 확인', sub: 'PIN 4자리를 입력해 주세요', mode: 'verify', stored: save.settings.pinHash, onOk, onCancel });
+}
+
+function openParent() {
+  parentGate(
+    () => showReport(overlay, { save, now, onClose: showStart }),
+    showStart,
+  );
+}
+
+let lockShown = false;
+
+/** 오늘 놀이 시간을 다 썼으면 잠금 카드를 보여주고 true */
+function guardLimit(): boolean {
+  if (!limitState(save, now()).over) return false;
+  if (game.state === 'playing') game.pause();
+  lockShown = true;
+  showLock(overlay, {
+    limitMin: save.settings.dailyLimitMin,
+    onParent: () =>
+      parentGate(
+        () => {
+          grantExtra(save, now());
+          writeSave(save);
+          lockShown = false;
+          toast(`${EXTRA_MIN}분 늘렸어요`);
+          // 하던 판이 있으면 이어서, 아니면 처음 화면으로
+          if (game.state === 'paused' && !questing && !reviewing) {
+            overlay.classList.add('hidden');
+            game.resume();
+          } else showStart();
+        },
+        () => guardLimit(),
+      ),
+  });
+  return true;
+}
+
+/** 1초마다: 놀이 시간을 기록하고, 제한이 가까워지면 알리고, 넘으면 잠근다 */
+let warned = false;
+let seconds = 0;
+setInterval(() => {
+  if (document.hidden) return;
+  if (lockShown) {
+    // 자정이 지나 새 날이 되면 잠금을 푼다
+    if (!limitState(save, now()).over) {
+      lockShown = false;
+      showStart();
+    }
+    return;
+  }
+  if (!(game.state === 'playing' || questing || reviewing)) return;
+  addPlay(save, 1000, now());
+  if (++seconds % 10 === 0) writeSave(save);
+  const lim = limitState(save, now());
+  if (!lim.enabled) return;
+  if (!warned && lim.remainingMs <= 5 * 60_000 && lim.remainingMs > 0) {
+    warned = true;
+    toast('오늘 놀 시간이 5분 남았어요');
+  }
+  if (lim.remainingMs > 5 * 60_000) warned = false;
+  // 퀘스트 카드를 푸는 중에는 끝낸 뒤에 잠근다
+  if (lim.over && !questing && !reviewing) guardLimit();
+}, 1000);
+window.addEventListener('pagehide', () => writeSave(save));
+
 function showStart() {
   enterFree();
   overlay.classList.remove('hidden');
@@ -359,7 +441,8 @@ function showStart() {
     <div class="start-actions">
       <button class="btn alt" id="go-box">📦 오답 상자${save.wrong.items.length ? ` <span class="badge">${save.wrong.items.length}</span>` : ''}</button>
       <button class="btn alt" id="cfg">설정</button>
-    </div></div>`;
+    </div>
+    <button class="linkbtn" id="go-parent">👪 부모님</button></div>`;
   overlay.querySelectorAll<HTMLButtonElement>('.world').forEach((b) => {
     b.onclick = () => {
       chooseWorld(b.dataset.id!);
@@ -370,6 +453,7 @@ function showStart() {
   $('go-adv').onclick = openMap;
   $('go-free').onclick = startFree;
   $('go-box').onclick = openWrongBox;
+  $('go-parent').onclick = openParent;
   $('cfg').onclick = () => showSettings(showStart);
 }
 
