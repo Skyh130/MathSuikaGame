@@ -8,7 +8,10 @@ export interface TopicStat {
 }
 
 export interface Save {
-  best: number;
+  /** 월드별 최고 점수 */
+  bests: Record<string, number>;
+  /** 마지막으로 고른 월드 */
+  world: string;
   powerups: Record<PowerUp, number>;
   settings: { hint: HintLevel; maxGrade: 2 | 3 | 4 };
   stats: Record<string, TopicStat>;
@@ -17,7 +20,8 @@ export interface Save {
 const KEY = 'math-suika-game.v1';
 
 export const defaultSave = (): Save => ({
-  best: 0,
+  bests: {},
+  world: 'double-forest',
   powerups: { hint: 2, bomb: 1, shake: 1, undo: 1 },
   settings: { hint: 'normal', maxGrade: 3 },
   stats: {},
@@ -28,9 +32,11 @@ export function loadSave(): Save {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return base;
-    const data = JSON.parse(raw) as Partial<Save>;
+    const data = JSON.parse(raw) as Partial<Save> & { best?: number };
     return {
-      best: data.best ?? base.best,
+      // 예전 저장(월드가 하나일 때)의 최고 점수는 더블 숲으로 옮긴다
+      bests: data.bests ?? (data.best ? { 'double-forest': data.best } : {}),
+      world: data.world ?? base.world,
       powerups: { ...base.powerups, ...data.powerups },
       settings: { ...base.settings, ...data.settings },
       stats: data.stats ?? {},

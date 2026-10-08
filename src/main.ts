@@ -1,6 +1,6 @@
 import './style.css';
 import { QUESTS, type Quest } from './content/quests';
-import { DOUBLE_FOREST } from './content/worlds';
+import { getWorld, SPRITE_COUNT, WORLDS, type WorldDef } from './content/worlds';
 import { assetUrl, loadAssets } from './game/assets';
 import { CH, CW } from './game/config';
 import { Game, type Piece } from './game/Game';
@@ -8,9 +8,9 @@ import { loadSave, writeSave, type HintLevel, type PowerUp } from './state/stora
 import { showQuest } from './ui/quest';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const world = DOUBLE_FOREST;
 const save = loadSave();
-const assets = await loadAssets(world.ladder.length);
+let world: WorldDef = getWorld(save.world);
+const assets = await loadAssets(SPRITE_COUNT);
 
 // ───────── 캔버스 ─────────
 const board = $<HTMLCanvasElement>('board');
@@ -32,7 +32,8 @@ const nextCanvas = $<HTMLCanvasElement>('next');
 const nextCtx = nextCanvas.getContext('2d')!;
 const toastEl = $('toast');
 const overlay = $('overlay');
-bestEl.textContent = String(save.best);
+const updateBest = () => (bestEl.textContent = String(save.bests[world.id] ?? 0));
+updateBest();
 
 let toastTimer = 0;
 function toast(msg: string) {
@@ -43,12 +44,29 @@ function toast(msg: string) {
 }
 
 const ladderEl = $('ladder');
-ladderEl.innerHTML = world.ladder
-  .map(
-    (v, i) =>
-      `<span class="step" data-i="${i}"><img class="dot" style="--i:${i}" src="${assetUrl(`fruits/${i}.png`)}" alt="" />${v}</span>`,
-  )
-  .join('');
+function renderLadder() {
+  const n = world.ladder.length;
+  ladderEl.innerHTML = world.ladder
+    .map((v, i) => {
+      const size = Math.round(16 + (i / (n - 1)) * 18);
+      return `<span class="step" data-i="${i}"><img class="dot" style="--sz:${size}px" src="${assetUrl(
+        `fruits/${world.sprites[i]}.png`,
+      )}" alt="" /><span class="lbl">${world.format(v)}</span></span>`;
+    })
+    .join('');
+}
+renderLadder();
+document.body.dataset.world = world.id;
+
+function chooseWorld(id: string) {
+  world = getWorld(id);
+  save.world = world.id;
+  game.setWorld(world);
+  document.body.dataset.world = world.id;
+  renderLadder();
+  updateBest();
+  writeSave(save);
+}
 
 function updatePowerups(c: Record<PowerUp, number>) {
   for (const k of Object.keys(c) as PowerUp[]) {
@@ -88,11 +106,12 @@ function pickQuest(): Quest {
   // 최근에 낸 문제는 잠시 빼고 (문제 수가 모자라면 전체 사용)
   const fresh = all.filter((q) => !recentQuests.includes(q.id));
   const pool = fresh.length >= 3 ? fresh : all;
+  const inWorld = (q: Quest) => (world.topics.includes(q.topic) ? 3 : 1);
   // 덜 본 주제와 틀렸던 주제를 우선 (간단한 가중치)
   const weight = (q: Quest) => {
     const st = save.stats[q.topic];
-    if (!st) return 3;
-    return 1 + Math.max(0, st.seen - st.correct) * 1.5 + (st.hints > st.seen ? 0.5 : 0);
+    if (!st) return 3 * inWorld(q);
+    return (1 + Math.max(0, st.seen - st.correct) * 1.5 + (st.hints > st.seen ? 0.5 : 0)) * inWorld(q);
   };
   const total = pool.reduce((a, q) => a + weight(q), 0);
   let r = Math.random() * total;
@@ -131,10 +150,10 @@ async function runQuest() {
 }
 
 function gameOver(score: number) {
-  const isBest = score > save.best;
+  const isBest = score > (save.bests[world.id] ?? 0);
   if (isBest) {
-    save.best = score;
-    bestEl.textContent = String(score);
+    save.bests[world.id] = score;
+    updateBest();
   }
   writeSave(save);
   overlay.classList.remove('hidden');
@@ -180,13 +199,23 @@ function showSettings(back: () => void) {
 
 function showStart() {
   overlay.classList.remove('hidden');
+  const card = (w: WorldDef) => `<button class="world${w.id === world.id ? ' sel' : ''}" data-id="${w.id}">
+      <span class="we">${w.emoji}</span><b>${w.name}</b><small>${w.grades}</small>
+      <i>${save.bests[w.id] ? `🏆 ${save.bests[w.id]}` : '&nbsp;'}</i></button>`;
   overlay.innerHTML = `<div class="card">
     <img class="logo" src="${assetUrl('ui/logo.png')}" alt="Math Suika Game" />
-    <p class="sub">값이 같은 과일끼리 닿으면 한 단계 커져요!<br />6+6 과 3×4 는 둘 다 12, 같은 값이에요.</p>
-    <p class="sub">월드: ${world.name}</p>
-    <img class="fox small" src="${assetUrl('fox/thumb.png')}" alt="" />
+    <p class="sub">값이 같은 과일끼리 닿으면 한 단계 커져요!</p>
+    <div class="worlds">${WORLDS.map(card).join('')}</div>
+    <p class="sub blurb" id="blurb">${world.emoji} ${world.blurb}</p>
     <button class="btn" id="go">시작하기</button>
     <button class="btn alt" id="cfg">설정</button></div>`;
+  overlay.querySelectorAll<HTMLButtonElement>('.world').forEach((b) => {
+    b.onclick = () => {
+      chooseWorld(b.dataset.id!);
+      overlay.querySelectorAll('.world').forEach((x) => x.classList.toggle('sel', x === b));
+      $('blurb').textContent = `${world.emoji} ${world.blurb}`;
+    };
+  });
   $('go').onclick = () => {
     overlay.classList.add('hidden');
     game.start();

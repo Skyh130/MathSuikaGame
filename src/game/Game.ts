@@ -1,6 +1,5 @@
 import Matter from 'matter-js';
-import type { WorldDef } from '../content/worlds';
-import { makeExpr } from '../math/expr';
+import { HUES, SPRITE_COUNT, type WorldDef } from '../content/worlds';
 import type { HintLevel, PowerUp } from '../state/storage';
 import type { Assets } from './assets';
 import { CH, CW, DANGER_Y, DROP_COOLDOWN_MS, FLOOR_Y, GAME_OVER_MS, LEFT, RIGHT, SPAWN_Y, WALL } from './config';
@@ -120,6 +119,17 @@ export class Game {
     this.settings = s;
   }
 
+  /** 월드를 바꾼다 (다음 start() 부터 적용). 판이 끝났거나 시작 전에만 부른다. */
+  setWorld(w: WorldDef): void {
+    if (this.world === w) return;
+    this.world = w;
+    this.reset();
+  }
+
+  get currentWorld(): WorldDef {
+    return this.world;
+  }
+
   // ───────── 수명 주기 ─────────
   /** 화면 그리기 루프만 시작한다 (시작 화면 뒤에서 게임판이 보이도록). */
   boot(): void {
@@ -211,7 +221,7 @@ export class Game {
         this.hooks.onToast(
           any
             ? `${this.current.label} 와(과) 값이 같은 과일이 반짝여요!`
-            : `${this.current.label} 의 값은 ${this.current.value}! 같은 값 과일이 아직 없어요.`,
+            : `${this.current.label} 의 값은 ${this.world.format(this.current.value)}! 같은 값 과일이 아직 없어요.`,
         );
         break;
       }
@@ -266,26 +276,39 @@ export class Game {
     return this.settings.hint === 'easy' ? 1 : this.settings.hint === 'normal' ? 2 : 3;
   }
 
-  private labelFor(value: number): string {
+  /** 과일이 작을수록 짧은 식만 쓴다 (글자가 너무 작아지는 것을 막는다) */
+  private labelFor(value: number, tier: number): string {
     const plain = this.settings.hint === 'easy' ? 0.25 : this.settings.hint === 'normal' ? 0.12 : 0;
-    return makeExpr(value, { level: this.levelFor(), plain });
+    const allowed = Math.round(this.world.radii[tier] / 3.3);
+    let best = '';
+    let bestLen = Infinity;
+    for (let i = 0; i < 12; i++) {
+      const text = this.world.label(value, { level: this.levelFor(), plain });
+      const len = text.replace(/\s/g, '').length;
+      if (len <= allowed) return text;
+      if (len < bestLen) {
+        best = text;
+        bestLen = len;
+      }
+    }
+    return best;
   }
 
   private spriteFor(tier: number): number {
     // 쉬움: 과일 종류가 단계를 알려준다. 그 외: 그림이 힌트가 되지 않도록 무작위
-    if (this.settings.hint === 'easy') return tier;
-    return Math.floor(Math.random() * this.world.hues.length);
+    if (this.settings.hint === 'easy') return this.world.sprites[tier];
+    return Math.floor(Math.random() * SPRITE_COUNT);
   }
 
   private makeLook(tier: number): { sprite: number; hue: number } {
     const sprite = this.spriteFor(tier);
-    return { sprite, hue: this.world.hues[sprite] };
+    return { sprite, hue: HUES[sprite] };
   }
 
   private makePiece(tier?: number): Piece {
     const t = tier ?? this.world.spawnTiers[Math.floor(Math.random() * this.world.spawnTiers.length)];
     const value = this.world.ladder[t];
-    return { tier: t, value, label: this.labelFor(value), ...this.makeLook(t) };
+    return { tier: t, value, label: this.labelFor(value, t), ...this.makeLook(t) };
   }
 
   private addFruit(piece: Piece, x: number, y: number): Fruit {
@@ -370,6 +393,11 @@ export class Game {
     if (this.hintValue !== null && this.time > this.hintUntil) this.hintValue = null;
   }
 
+  /** 합쳐서 만든 단계의 점수. 값의 단위(cm, 분, 분수 …)와 상관없이 단계만 본다. */
+  private points(tier: number): number {
+    return 2 ** (tier + 1);
+  }
+
   private processMerges(): void {
     if (this.mergeQueue.length === 0) return;
     const queue = this.mergeQueue;
@@ -385,18 +413,20 @@ export class Game {
 
       if (tier >= this.world.ladder.length) {
         // 마지막 단계끼리 만나면 펑! 보너스
-        this.score += a.value * 2;
+        const bonus = this.points(tier) * 2;
+        this.score += bonus;
         this.burst(x, y, a.hue, 28);
-        this.popups.push({ x, y, text: `대박! +${a.value * 2}`, age: 0 });
+        this.popups.push({ x, y, text: `대박! +${bonus}`, age: 0 });
         this.addPowerup('shake');
       } else {
         const value = this.world.ladder[tier];
-        const piece: Piece = { tier, value, label: this.labelFor(value), ...this.makeLook(tier) };
+        const piece: Piece = { tier, value, label: this.labelFor(value, tier), ...this.makeLook(tier) };
         const f = this.addFruit(piece, x, y);
         Body.setVelocity(f.body, { x: 0, y: 0 });
-        this.score += value;
+        const gain = this.points(tier);
+        this.score += gain;
         this.burst(x, y, piece.hue, 12 + tier * 2);
-        this.popups.push({ x, y: y - this.world.radii[tier], text: `+${value}`, age: 0 });
+        this.popups.push({ x, y: y - this.world.radii[tier], text: `+${gain}`, age: 0 });
         if (tier > this.maxTier) {
           this.maxTier = tier;
           this.hooks.onMaxTier(tier);
