@@ -13,7 +13,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: non
 body {
   font-family: var(--font);
   color: var(--ink);
-  background: linear-gradient(180deg, var(--sky) 0%, var(--mint) 60%, #a5dcb9 100%);
+  background: #9bd56b url('/assets/bg.jpg') center top / cover no-repeat;
   touch-action: none;
   user-select: none;
 }
@@ -57,11 +57,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 #board {
   height: 100%;
   max-width: 100%;
-  aspect-ratio: 360 / 540;
-  border-radius: 20px;
-  box-shadow: 0 0 0 5px #e6b87a, 0 9px 0 rgba(0,0,0,.15);
-  background: var(--card);
+  aspect-ratio: 428 / 718;
   cursor: pointer;
+  filter: drop-shadow(0 6px 0 rgba(0,0,0,.12));
 }
 .toast {
   position: absolute; left: 50%; top: 10px; transform: translateX(-50%) translateY(-10px);
@@ -78,8 +76,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .ladder .step { display: flex; flex-direction: column; align-items: center; gap: 1px; font-size: 10px; opacity: .4; min-width: 0; }
 .ladder .step.on { opacity: 1; }
 .ladder .dot {
-  border-radius: 50%; display: block; border: 2px solid rgba(0,0,0,.18);
-  width: calc(10px + var(--i) * 1.7px); height: calc(10px + var(--i) * 1.7px);
+  display: block;
+  width: calc(16px + var(--i) * 1.9px); height: calc(16px + var(--i) * 1.9px); object-fit: contain;
 }
 
 .powerups { flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -90,7 +88,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 }
 .powerups button:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0,0,0,.14); }
 .powerups button.armed { background: var(--sun); }
-.powerups .ico { font-size: 24px; }
+.powerups .ico { width: 44px; height: 44px; object-fit: contain; pointer-events: none; }
 .powerups .nm { font-size: 12px; }
 .powerups i {
   position: absolute; top: -6px; right: -2px; font-style: normal; font-size: 13px;
@@ -154,3 +152,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; font-size: 17px; }
 .row select { font-family: inherit; font-size: 17px; padding: 6px; border-radius: 10px; border: 2px solid #e6d3b3; background: #fff; }
 .emoji-big { font-size: 56px; line-height: 1; }
+
+.logo { display: block; width: 82%; max-width: 320px; margin: -6px auto 2px; }
+.fox { display: block; margin: 0 auto 4px; height: 120px; width: auto; }
+.fox.small { height: 84px; margin-top: 8px; }
+.fox.corner { float: left; height: 84px; margin: -4px 4px 0 -4px; }

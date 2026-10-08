@@ -2,7 +2,8 @@ import Matter from 'matter-js';
 import type { WorldDef } from '../content/worlds';
 import { makeExpr } from '../math/expr';
 import type { HintLevel, PowerUp } from '../state/storage';
-import { DANGER_Y, DROP_COOLDOWN_MS, GAME_OVER_MS, H, SPAWN_Y, W, WALL } from './config';
+import type { Assets } from './assets';
+import { CH, CW, DANGER_Y, DROP_COOLDOWN_MS, FLOOR_Y, GAME_OVER_MS, LEFT, RIGHT, SPAWN_Y, WALL } from './config';
 import { drawBoard, drawFruit } from './render';
 
 const { Engine, Bodies, Body, Composite, Events } = Matter;
@@ -11,6 +12,8 @@ export interface Piece {
   tier: number;
   value: number;
   label: string;
+  /** 보여줄 과일 그림 번호 (쉬움 모드에서는 단계와 같다) */
+  sprite: number;
   hue: number;
 }
 
@@ -72,7 +75,7 @@ export class Game {
   private mergeQueue: Array<[Fruit, Fruit]> = [];
   private current!: Piece;
   private next!: Piece;
-  private aimX = W / 2;
+  private aimX = CW / 2;
   private time = 0;
   private acc = 0;
   private lastDrop = -1e9;
@@ -94,6 +97,7 @@ export class Game {
     private world: WorldDef,
     private settings: GameSettings,
     readonly hooks: GameHooks,
+    private assets: Assets,
     initialPowerups: Record<PowerUp, number>,
   ) {
     this.powerups = { ...initialPowerups };
@@ -168,7 +172,7 @@ export class Game {
   // ───────── 조작 ─────────
   setAim(x: number): void {
     const r = this.world.radii[this.current.tier];
-    this.aimX = Math.max(r + 3, Math.min(W - r - 3, x));
+    this.aimX = Math.max(LEFT + r + 2, Math.min(RIGHT - r - 2, x));
   }
 
   /** 포인터를 뗄 때 호출. 폭탄 모드면 과일을 터뜨리고, 아니면 떨어뜨린다. */
@@ -267,16 +271,21 @@ export class Game {
     return makeExpr(value, { level: this.levelFor(), plain });
   }
 
-  private hueFor(tier: number): number {
-    // 쉬움: 색이 단계를 알려준다. 그 외: 색이 힌트가 되지 않도록 무작위
-    if (this.settings.hint === 'easy') return this.world.hues[tier];
-    return this.world.hues[Math.floor(Math.random() * this.world.hues.length)];
+  private spriteFor(tier: number): number {
+    // 쉬움: 과일 종류가 단계를 알려준다. 그 외: 그림이 힌트가 되지 않도록 무작위
+    if (this.settings.hint === 'easy') return tier;
+    return Math.floor(Math.random() * this.world.hues.length);
+  }
+
+  private makeLook(tier: number): { sprite: number; hue: number } {
+    const sprite = this.spriteFor(tier);
+    return { sprite, hue: this.world.hues[sprite] };
   }
 
   private makePiece(tier?: number): Piece {
     const t = tier ?? this.world.spawnTiers[Math.floor(Math.random() * this.world.spawnTiers.length)];
     const value = this.world.ladder[t];
-    return { tier: t, value, label: this.labelFor(value), hue: this.hueFor(t) };
+    return { tier: t, value, label: this.labelFor(value), ...this.makeLook(t) };
   }
 
   private addFruit(piece: Piece, x: number, y: number): Fruit {
@@ -295,10 +304,11 @@ export class Game {
 
   private buildWalls(): void {
     const opts = { isStatic: true, friction: 0.3 };
+    const mid = (LEFT + RIGHT) / 2;
     Composite.add(this.engine.world, [
-      Bodies.rectangle(W / 2, H + WALL / 2, W + WALL * 2, WALL, opts),
-      Bodies.rectangle(-WALL / 2, H / 2 - 200, WALL, H + 400, opts),
-      Bodies.rectangle(W + WALL / 2, H / 2 - 200, WALL, H + 400, opts),
+      Bodies.rectangle(mid, FLOOR_Y + WALL / 2, RIGHT - LEFT + WALL * 2, WALL, opts),
+      Bodies.rectangle(LEFT - WALL / 2, FLOOR_Y / 2 - 200, WALL, FLOOR_Y + 400, opts),
+      Bodies.rectangle(RIGHT + WALL / 2, FLOOR_Y / 2 - 200, WALL, FLOOR_Y + 400, opts),
     ]);
   }
 
@@ -306,7 +316,7 @@ export class Game {
   private takeSnapshot(): void {
     this.snapshot = {
       fruits: [...this.fruits.values()].map((f) => ({
-        tier: f.tier, value: f.value, label: f.label, hue: f.hue, x: f.body.position.x, y: f.body.position.y,
+        tier: f.tier, value: f.value, label: f.label, sprite: f.sprite, hue: f.hue, x: f.body.position.x, y: f.body.position.y,
       })),
       score: this.score,
       merges: this.merges,
@@ -381,7 +391,7 @@ export class Game {
         this.addPowerup('shake');
       } else {
         const value = this.world.ladder[tier];
-        const piece: Piece = { tier, value, label: this.labelFor(value), hue: this.hueFor(tier) };
+        const piece: Piece = { tier, value, label: this.labelFor(value), ...this.makeLook(tier) };
         const f = this.addFruit(piece, x, y);
         Body.setVelocity(f.body, { x: 0, y: 0 });
         this.score += value;
@@ -425,13 +435,13 @@ export class Game {
   // ───────── 그리기 ─────────
   private draw(now: number): void {
     const ctx = this.ctx;
-    drawBoard(ctx, this.overMs / GAME_OVER_MS, now);
+    drawBoard(ctx, this.assets.box, this.overMs / GAME_OVER_MS, now);
 
     const pulse = 0.5 + 0.5 * Math.sin(now / 130);
     for (const f of this.fruits.values()) {
       const r = this.world.radii[f.tier];
       const hl = this.hintValue !== null && f.value === this.hintValue ? pulse : 0;
-      drawFruit(ctx, f.body.position.x, f.body.position.y, r, f.label, f.hue, hl);
+      drawFruit(ctx, f.body.position.x, f.body.position.y, r, f.label, this.look(f), hl);
     }
 
     if (this.state === 'playing' || this.state === 'paused') {
@@ -442,12 +452,12 @@ export class Game {
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(this.aimX, SPAWN_Y + r);
-      ctx.lineTo(this.aimX, H);
+      ctx.lineTo(this.aimX, FLOOR_Y);
       ctx.stroke();
       ctx.restore();
       const ready = this.time - this.lastDrop >= DROP_COOLDOWN_MS;
       ctx.globalAlpha = ready ? 1 : 0.45;
-      drawFruit(ctx, this.aimX, SPAWN_Y, r, this.current.label, this.current.hue);
+      drawFruit(ctx, this.aimX, SPAWN_Y, r, this.current.label, this.look(this.current));
       ctx.globalAlpha = 1;
     }
 
@@ -476,15 +486,19 @@ export class Game {
 
     if (this.bombMode) {
       ctx.fillStyle = 'rgba(0,0,0,0.12)';
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillRect(0, 0, CW, CH);
     }
+  }
+
+  private look(p: Piece) {
+    return { sprite: p.sprite, hue: p.hue, img: this.assets.fruits[p.sprite] };
   }
 
   /** 미리보기용: 다음 과일을 작은 캔버스에 그린다 */
   drawPreview(ctx: CanvasRenderingContext2D, piece: Piece, size: number): void {
     ctx.clearRect(0, 0, size, size);
     const r = size * 0.38;
-    drawFruit(ctx, size / 2, size / 2 + 3, r, piece.label, piece.hue);
+    drawFruit(ctx, size / 2, size / 2 + 3, r, piece.label, this.look(piece));
   }
 
   get maxReachedTier(): number {

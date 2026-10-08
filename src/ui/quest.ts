@@ -1,3 +1,4 @@
+import { assetUrl } from '../game/assets';
 import { TOPIC_NAMES, type BuildQuest, type Quest } from '../content/quests';
 import { evaluate, type Token } from '../math/evaluate';
 
@@ -27,6 +28,7 @@ export function showQuest(overlay: HTMLElement, quest: Quest): Promise<QuestResu
 
     // 공통 뼈대
     card.innerHTML = `
+      <img class="fox corner" src="${assetUrl('fox/think.png')}" alt="" />
       <span class="ribbon">🎁 미스터리 퀘스트 · ${TOPIC_NAMES[quest.topic]}</span>
       <p class="q"></p>
       <div class="body"></div>
@@ -60,6 +62,7 @@ export function showQuest(overlay: HTMLElement, quest: Quest): Promise<QuestResu
       card.querySelector('.actions')!.innerHTML = `<button class="btn" data-act="done">🎉 선물 받기</button>`;
       (card.querySelector('[data-act=skip]') as HTMLElement).remove();
       body.style.pointerEvents = 'none';
+      (card.querySelector('.fox') as HTMLImageElement).src = assetUrl('fox/thumb.png');
       say(`정답! ${quest.explanation}`, 'good');
       (card.querySelector('[data-act=done]') as HTMLElement).onclick = finish;
     };

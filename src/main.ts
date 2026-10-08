@@ -1,7 +1,8 @@
 import './style.css';
 import { QUESTS, type Quest } from './content/quests';
 import { DOUBLE_FOREST } from './content/worlds';
-import { H, W } from './game/config';
+import { assetUrl, loadAssets } from './game/assets';
+import { CH, CW } from './game/config';
 import { Game, type Piece } from './game/Game';
 import { loadSave, writeSave, type HintLevel, type PowerUp } from './state/storage';
 import { showQuest } from './ui/quest';
@@ -9,6 +10,7 @@ import { showQuest } from './ui/quest';
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const world = DOUBLE_FOREST;
 const save = loadSave();
+const assets = await loadAssets(world.ladder.length);
 
 // ───────── 캔버스 ─────────
 const board = $<HTMLCanvasElement>('board');
@@ -16,9 +18,9 @@ const ctx = board.getContext('2d')!;
 function fitCanvas() {
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   const rect = board.getBoundingClientRect();
-  const scale = (rect.width / W) * dpr;
+  const scale = (rect.width / CW) * dpr;
   board.width = Math.round(rect.width * dpr);
-  board.height = Math.round((rect.width * H * dpr) / W);
+  board.height = Math.round((rect.width * CH * dpr) / CW);
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
 }
 new ResizeObserver(fitCanvas).observe(board);
@@ -44,7 +46,7 @@ const ladderEl = $('ladder');
 ladderEl.innerHTML = world.ladder
   .map(
     (v, i) =>
-      `<span class="step" data-i="${i}"><span class="dot" style="--i:${i};background:hsl(${world.hues[i]} 75% 60%)"></span>${v}</span>`,
+      `<span class="step" data-i="${i}"><img class="dot" style="--i:${i}" src="${assetUrl(`fruits/${i}.png`)}" alt="" />${v}</span>`,
   )
   .join('');
 
@@ -74,6 +76,7 @@ const game: Game = new Game(
     onPowerups: updatePowerups,
     onBombMode: (on) => $('btn-bomb').classList.toggle('armed', on),
   },
+  assets,
   save.powerups,
 );
 updatePowerups(game.powerups);
@@ -136,8 +139,8 @@ function gameOver(score: number) {
   writeSave(save);
   overlay.classList.remove('hidden');
   overlay.innerHTML = `<div class="card">
-    <div class="emoji-big">${isBest ? '🏆' : '🍉'}</div>
-    <h2>${isBest ? '최고 기록이에요!' : '게임 끝!'}</h2>
+    <img class="fox" src="${assetUrl(isBest ? 'fox/cheer.png' : 'fox/think.png')}" alt="" />
+    <h2>${isBest ? '최고 기록이에요!' : '아쉽다, 한 번 더!'}</h2>
     <p>점수 <b>${score}</b></p>
     <button class="btn" id="again">다시 하기</button>
     <button class="btn alt" id="home">처음으로</button></div>`;
@@ -178,10 +181,10 @@ function showSettings(back: () => void) {
 function showStart() {
   overlay.classList.remove('hidden');
   overlay.innerHTML = `<div class="card">
-    <div class="emoji-big">🍉</div>
-    <h1>Math Suika Game</h1>
+    <img class="logo" src="${assetUrl('ui/logo.png')}" alt="Math Suika Game" />
     <p class="sub">값이 같은 과일끼리 닿으면 한 단계 커져요!<br />6+6 과 3×4 는 둘 다 12, 같은 값이에요.</p>
     <p class="sub">월드: ${world.name}</p>
+    <img class="fox small" src="${assetUrl('fox/thumb.png')}" alt="" />
     <button class="btn" id="go">시작하기</button>
     <button class="btn alt" id="cfg">설정</button></div>`;
   $('go').onclick = () => {
@@ -194,7 +197,7 @@ function showStart() {
 // ───────── 입력 ─────────
 const toLogical = (e: PointerEvent) => {
   const r = board.getBoundingClientRect();
-  return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
+  return { x: ((e.clientX - r.left) / r.width) * CW, y: ((e.clientY - r.top) / r.height) * CH };
 };
 board.addEventListener('pointerdown', (e) => {
   board.setPointerCapture(e.pointerId);
