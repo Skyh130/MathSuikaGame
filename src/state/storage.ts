@@ -12,6 +12,8 @@ export interface Save {
   bests: Record<string, number>;
   /** 마지막으로 고른 월드 */
   world: string;
+  /** 모험 모드 스테이지별 최고 별 (id: `${월드}:${번호}`) */
+  adventure: Record<string, number>;
   powerups: Record<PowerUp, number>;
   settings: { hint: HintLevel; maxGrade: 2 | 3 | 4 };
   stats: Record<string, TopicStat>;
@@ -22,6 +24,7 @@ const KEY = 'math-suika-game.v1';
 export const defaultSave = (): Save => ({
   bests: {},
   world: 'double-forest',
+  adventure: {},
   powerups: { hint: 2, bomb: 1, shake: 1, undo: 1 },
   settings: { hint: 'normal', maxGrade: 3 },
   stats: {},
@@ -37,6 +40,7 @@ export function loadSave(): Save {
       // 예전 저장(월드가 하나일 때)의 최고 점수는 더블 숲으로 옮긴다
       bests: data.bests ?? (data.best ? { 'double-forest': data.best } : {}),
       world: data.world ?? base.world,
+      adventure: data.adventure ?? {},
       powerups: { ...base.powerups, ...data.powerups },
       settings: { ...base.settings, ...data.settings },
       stats: data.stats ?? {},

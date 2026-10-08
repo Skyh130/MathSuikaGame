@@ -1,10 +1,12 @@
 import './style.css';
+import { goalLines, isCleared, MAX_STARS, stagesFor, starsFor, type Progress, type Stage } from './content/adventure';
 import { QUESTS, type Quest } from './content/quests';
 import { getWorld, SPRITE_COUNT, WORLDS, type WorldDef } from './content/worlds';
 import { assetUrl, loadAssets } from './game/assets';
 import { CH, CW } from './game/config';
 import { Game, type Piece } from './game/Game';
 import { loadSave, writeSave, type HintLevel, type PowerUp } from './state/storage';
+import { showPause, showStageClear, showStageFail, showStageIntro, showStageMap, totalStars } from './ui/adventure';
 import { showQuest } from './ui/quest';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -44,12 +46,12 @@ function toast(msg: string) {
 }
 
 const ladderEl = $('ladder');
-function renderLadder() {
+function renderLadder(goalTier?: number) {
   const n = world.ladder.length;
   ladderEl.innerHTML = world.ladder
     .map((v, i) => {
       const size = Math.round(16 + (i / (n - 1)) * 18);
-      return `<span class="step" data-i="${i}"><img class="dot" style="--sz:${size}px" src="${assetUrl(
+      return `<span class="step${i === goalTier ? ' goal' : ''}" data-i="${i}"><img class="dot" style="--sz:${size}px" src="${assetUrl(
         `fruits/${world.sprites[i]}.png`,
       )}" alt="" /><span class="lbl">${world.format(v)}</span></span>`;
     })
@@ -66,6 +68,35 @@ function chooseWorld(id: string) {
   renderLadder();
   updateBest();
   writeSave(save);
+}
+
+// ───────── 모험 모드 상태 ─────────
+interface StageRun {
+  stage: Stage;
+  progress: Progress;
+}
+/** 모험 중이면 현재 스테이지, 자유 모드면 null */
+let run: StageRun | null = null;
+const goalsEl = $('goals');
+
+function renderGoals() {
+  if (!run) {
+    goalsEl.classList.add('hidden');
+    return;
+  }
+  goalsEl.classList.remove('hidden');
+  goalsEl.innerHTML = goalLines(world, run.stage.goal, run.progress)
+    .map((l) => `<span class="chip${l.done ? ' done' : ''}">${l.icon} ${l.text}</span>`)
+    .join('');
+}
+
+/** 자유 모드로 돌아간다 (목표 표시 제거, 사용자가 정한 힌트 단계) */
+function enterFree() {
+  run = null;
+  game.setSettings({ hint: save.settings.hint });
+  game.setQuestPace(5, 8);
+  renderGoals();
+  renderLadder();
 }
 
 function updatePowerups(c: Record<PowerUp, number>) {
@@ -86,8 +117,14 @@ const game: Game = new Game(
   {
     onScore: (s) => (scoreEl.textContent = String(s)),
     onNext: (p: Piece) => game.drawPreview(nextCtx, p, nextCanvas.width),
-    onMaxTier: (t) =>
-      ladderEl.querySelectorAll('.step').forEach((el, i) => el.classList.toggle('on', i <= t)),
+    onMaxTier: (t) => {
+      ladderEl.querySelectorAll('.step').forEach((el, i) => el.classList.toggle('on', i <= t));
+      if (run && t > run.progress.maxTier) {
+        run.progress.maxTier = t;
+        renderGoals();
+        checkStage();
+      }
+    },
     onQuest: () => void runQuest(),
     onOver: (s) => gameOver(s),
     onToast: toast,
@@ -138,6 +175,11 @@ async function runQuest() {
   st.hints += res.hintsUsed;
   if (res.solved) {
     st.correct++;
+    if (run) {
+      run.progress.quests++;
+      if (res.hintsUsed === 0) run.progress.noHintQuests++;
+      renderGoals();
+    }
     const r = Math.random();
     const kind: PowerUp = r < 0.4 ? 'hint' : r < 0.6 ? 'bomb' : r < 0.8 ? 'shake' : 'undo';
     game.addPowerup(kind);
@@ -146,10 +188,68 @@ async function runQuest() {
   }
   writeSave(save);
   questing = false;
+  if (checkStage()) return;
   game.resume();
 }
 
+// ───────── 모험 모드 흐름 ─────────
+/** 목표를 이뤘으면 클리어 처리하고 true */
+function checkStage(): boolean {
+  if (!run || game.state === 'won' || !isCleared(run.stage.goal, run.progress)) return false;
+  const { stage, progress } = run;
+  game.finish();
+  progress.drops = game.drops;
+  const stars = starsFor(stage, progress);
+  const best = save.adventure[stage.id] ?? 0;
+  save.adventure[stage.id] = Math.max(best, stars);
+  writeSave(save);
+  const hasNext = stage.index + 1 < stagesFor(world).length;
+  showStageClear(
+    overlay,
+    { world, stage, stars, best, hasNext, drops: progress.drops },
+    {
+      onNext: () => startStage(stagesFor(world)[stage.index + 1]),
+      onRetry: () => startStage(stage),
+      onMap: openMap,
+    },
+  );
+  return true;
+}
+
+function startStage(stage: Stage) {
+  run = { stage, progress: { maxTier: -1, quests: 0, noHintQuests: 0, drops: 0 } };
+  game.setSettings({ hint: stage.hint });
+  game.setQuestPace(...stage.pace);
+  renderGoals();
+  renderLadder(stage.goal.tier);
+  overlay.classList.add('hidden');
+  game.start();
+}
+
+function openMap() {
+  enterFree();
+  const stages = stagesFor(world);
+  showStageMap(overlay, world, stages, save.adventure, {
+    onPick: (i) =>
+      showStageIntro(overlay, world, stages[i], { onGo: () => startStage(stages[i]), onBack: openMap }),
+    onBack: showStart,
+  });
+}
+
+function startFree() {
+  enterFree();
+  overlay.classList.add('hidden');
+  game.start();
+}
+
 function gameOver(score: number) {
+  if (run) {
+    showStageFail(overlay, { world, stage: run.stage, progress: run.progress }, {
+      onRetry: () => startStage(run!.stage),
+      onMap: openMap,
+    });
+    return;
+  }
   const isBest = score > (save.bests[world.id] ?? 0);
   if (isBest) {
     save.bests[world.id] = score;
@@ -163,10 +263,7 @@ function gameOver(score: number) {
     <p>점수 <b>${score}</b></p>
     <button class="btn" id="again">다시 하기</button>
     <button class="btn alt" id="home">처음으로</button></div>`;
-  $('again').onclick = () => {
-    overlay.classList.add('hidden');
-    game.start();
-  };
+  $('again').onclick = startFree;
   $('home').onclick = showStart;
 }
 
@@ -198,17 +295,24 @@ function showSettings(back: () => void) {
 }
 
 function showStart() {
+  enterFree();
   overlay.classList.remove('hidden');
-  const card = (w: WorldDef) => `<button class="world${w.id === world.id ? ' sel' : ''}" data-id="${w.id}">
+  const card = (w: WorldDef) => {
+    const stars = totalStars(stagesFor(w), save.adventure);
+    return `<button class="world${w.id === world.id ? ' sel' : ''}" data-id="${w.id}">
       <span class="we">${w.emoji}</span><b>${w.name}</b><small>${w.grades}</small>
-      <i>${save.bests[w.id] ? `🏆 ${save.bests[w.id]}` : '&nbsp;'}</i></button>`;
+      <i>${stars ? `⭐ ${stars}/${MAX_STARS}` : '&nbsp;'}</i></button>`;
+  };
   overlay.innerHTML = `<div class="card">
     <img class="logo" src="${assetUrl('ui/logo.png')}" alt="Math Suika Game" />
     <p class="sub">값이 같은 과일끼리 닿으면 한 단계 커져요!</p>
     <div class="worlds">${WORLDS.map(card).join('')}</div>
     <p class="sub blurb" id="blurb">${world.emoji} ${world.blurb}</p>
-    <button class="btn" id="go">시작하기</button>
-    <button class="btn alt" id="cfg">설정</button></div>`;
+    <div class="start-actions">
+      <button class="btn" id="go-adv">🗺️ 모험</button>
+      <button class="btn" id="go-free">♾️ 자유</button>
+      <button class="btn alt" id="cfg">설정</button>
+    </div></div>`;
   overlay.querySelectorAll<HTMLButtonElement>('.world').forEach((b) => {
     b.onclick = () => {
       chooseWorld(b.dataset.id!);
@@ -216,10 +320,8 @@ function showStart() {
       $('blurb').textContent = `${world.emoji} ${world.blurb}`;
     };
   });
-  $('go').onclick = () => {
-    overlay.classList.add('hidden');
-    game.start();
-  };
+  $('go-adv').onclick = openMap;
+  $('go-free').onclick = startFree;
   $('cfg').onclick = () => showSettings(showStart);
 }
 
@@ -246,10 +348,15 @@ document.querySelectorAll<HTMLButtonElement>('.powerups button').forEach((b) => 
 $('btn-settings').onclick = () => {
   if (game.state === 'playing') {
     game.pause();
-    showSettings(() => {
+    const resume = () => {
       overlay.classList.add('hidden');
       game.resume();
-    });
+    };
+    if (run) {
+      showPause(overlay, { onResume: resume, onRetry: () => startStage(run!.stage), onMap: openMap });
+    } else {
+      showSettings(resume);
+    }
   } else if (game.state === 'ready') showSettings(showStart);
 };
 
@@ -262,4 +369,4 @@ fitCanvas();
 showStart();
 game.boot();
 
-if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
+if (import.meta.env.DEV) Object.assign(window, { __game: game, __quests: QUESTS });

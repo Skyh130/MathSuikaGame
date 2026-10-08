@@ -177,3 +177,36 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .world i { font-style: normal; font-size: 11px; color: #c0861a; min-height: 14px; }
 .world.sel { border-color: var(--mint-d); background: #e7f8ee; box-shadow: 0 3px 0 rgba(0,0,0,.14); }
 .blurb { margin: 2px 0 0; min-height: 20px; }
+
+.goals { flex: none; display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; margin-top: -2px; }
+.chip {
+  display: inline-block; background: var(--card); border-radius: 12px; padding: 2px 10px; font-size: 13px;
+  box-shadow: 0 2px 0 rgba(0,0,0,.12);
+}
+.chip.done { background: #d4f5e0; }
+.chip.done::after { content: ' ✓'; color: #1f8f5b; }
+.chips { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.chips .chip { font-size: 16px; padding: 4px 12px; border: 2px solid #ecdcc0; box-shadow: none; }
+.ladder .step.goal { outline: 2px dashed #f59e0b; outline-offset: 1px; border-radius: 8px; }
+
+.nodes { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
+.node {
+  display: flex; align-items: center; gap: 10px; text-align: left; padding: 6px 10px; width: 100%;
+  border: 3px solid #e6d3b3; border-radius: 16px; background: #fff;
+}
+.node .no {
+  flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--mint-d); color: #fff; font-size: 20px;
+}
+.node .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.node .tx b { font-size: 17px; font-weight: normal; }
+.node .tx small { font-size: 12px; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node .stars { flex: none; font-size: 17px; letter-spacing: 1px; color: #f5a623; }
+.node.done { border-color: var(--mint-d); background: #f1fbf5; }
+.node.locked { opacity: .5; }
+.node.locked .no { background: #b9b2a6; }
+.howto { background: #fff6d6; border-radius: 12px; padding: 6px 10px; margin: 6px 0; font-size: 14px; text-align: left; line-height: 1.5; }
+.bigstars { font-size: 52px; line-height: 1; letter-spacing: 6px; color: #d9d2c3; margin: 4px 0; }
+.bigstars span.on { color: #f5a623; text-shadow: 0 3px 0 rgba(0,0,0,.15); animation: starpop .5s var(--d, 0s) both cubic-bezier(.3,1.6,.5,1); }
+@keyframes starpop { from { transform: scale(0) rotate(-40deg); opacity: 0; } to { transform: scale(1) rotate(0); opacity: 1; } }
+.start-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
